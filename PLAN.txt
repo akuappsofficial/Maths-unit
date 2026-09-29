@@ -1,0 +1,295 @@
+==============================================================
+MT1 — MATHS UNIT QUIZ APP
+Full implementation plan
+==============================================================
+
+Project repo : akuappsofficial/Maths-unit
+Branch       : base44/setup-8d2d5fa5
+Status       : PLAN ONLY — no application code yet
+Author       : Base44 (setup session)
+
+==============================================================
+1. WHAT WE ARE BUILDING
+==============================================================
+
+A school maths quiz app. Teachers (admins) build multiple-choice
+quizzes; students sign in, enter a short quiz code on a
+smartboard-style screen, and the quiz opens full-screen. Each
+question shows a number, the question text, up to four options,
+and an optional figure. A slide-in "smartboard" panel gives the
+student a drawing canvas for rough working — pen, colours,
+eraser, clear-all, close. Optional time limits. Polished,
+animated UI with a custom cursor.
+
+Two interfaces:
+  A. Admin / teacher area  -> create and manage quizzes
+  B. Student area          -> join by code, take the quiz, see score
+
+==============================================================
+2. WHO USES IT (ROLES)
+==============================================================
+
+STUDENT
+  - Registers / signs in with USERNAME + PASSWORD
+  - Optionally signs in with Google (secondary — see 3.3)
+  - Enters a quiz code, answers questions, gets a score
+
+ADMIN (teacher)
+  - Signs in with a SHARED ADMIN USERNAME + PASSWORD (decided)
+  - Creates quizzes, adds questions, uploads figures
+  - Sets optional time limits, publishes, shares the code
+
+==============================================================
+3. AUTHENTICATION
+==============================================================
+
+3.1 Students — username + password  (PRIMARY, as requested)
+    - Sign-up: username, display name, password
+    - Password hashed with bcrypt
+    - Session = signed httpOnly cookie (no third-party dependency)
+    - Login / logout / "who am I" endpoints
+
+3.2 Admin — shared admin username + password  (as requested)
+    - A single set of credentials, held in environment variables
+      (ADMIN_USERNAME + ADMIN_PASSWORD_HASH), NOT in the database
+    - Admin login unlocks the admin area for that session
+    - Chosen because it is the simplest thing that works; can be
+      upgraded to per-teacher accounts later
+
+3.3 Google login — OPTIONAL, SECONDARY  (not primary)
+    - "Sign in with Google" appears as a secondary button
+    - Requires GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET, which were
+      NOT provided in this session, so the integration stays
+      inactive until they are added from the Secrets page
+    - When wired, dev redirect URI will be:
+        https://3000-<preview-host-suffix>/api/auth/callback/google
+      (the suffix is shown in the preview URL and can change when
+      the sandbox is recreated — it must be kept in sync in the
+      Google Cloud console for the OAuth client)
+
+==============================================================
+4. CORE FLOWS
+==============================================================
+
+4.1 ADMIN CREATES A QUIZ
+    - Admin signs in at the admin login
+    - Creates a quiz: title, description, optional time limit
+    - Adds questions one by one:
+        * question text
+        * four options (A/B/C/D)
+        * which option is correct
+        * optional figure image (uploaded)
+        * optional per-question time limit
+    - Publishes the quiz -> the app generates a short join CODE
+      (e.g. 6 characters, unambiguous, shareable on a board)
+
+4.2 STUDENT JOINS WITH A CODE
+    - Student lands on the "smartboard" entry screen
+    - Types the quiz code -> quiz opens immediately
+    - No code = no quiz (code is the whole entry mechanism)
+
+4.3 TAKING THE QUIZ
+    - One question at a time, full screen
+    - Shows: question number, question text, optional figure,
+      four option buttons
+    - Student selects an option (selectable / changeable before
+      moving on, per the chosen pacing model)
+    - If a time limit is enabled, a countdown is shown
+    - On finish: score summary (correct / total, per-question review)
+
+4.4 SMARTBOARD WORKING PANEL
+    - Slide-in sidebar canvas over the quiz
+    - Tools: pen, colour choices, stroke width, eraser,
+      clear-all, close
+    - Drawn over the question so the student can do rough maths
+    - Canvas clears per question (or persists — see open items)
+    - On touch devices it works with finger/stylus
+
+==============================================================
+5. DATA MODEL  (PostgreSQL)
+==============================================================
+
+users
+  id, username (unique), password_hash, display_name,
+  role (student|admin), google_id (nullable), created_at
+
+quizzes
+  id, code (unique, short), title, description,
+  time_limit_seconds (nullable), published (bool),
+  created_at, updated_at
+
+questions
+  id, quiz_id, position, text, image_url (nullable),
+  option_a, option_b, option_c, option_d,
+  correct_option (a|b|c|d), time_limit_seconds (nullable),
+  points (default 1)
+
+attempts
+  id, quiz_id, user_id, started_at, finished_at,
+  score, total_questions
+
+answers
+  id, attempt_id, question_id, selected_option,
+  is_correct, answered_at
+
+==============================================================
+6. TECH STACK  (chosen to run cleanly in this sandbox)
+==============================================================
+
+Frontend + backend : Next.js (App Router) + TypeScript
+                     -> ONE process, ONE origin on port 3000,
+                        so login cookies just work
+Styling            : Tailwind CSS
+Animation          : CSS transitions + a small motion library
+                     (framer-motion) for staggered reveals,
+                     panel slide-in, timer ring
+Canvas             : native HTML5 2D canvas (no heavy deps)
+Database           : PostgreSQL 16 (compose service)
+ORM / access       : lightweight SQL client + migrations
+Passwords          : bcrypt
+Image processing   : sharp (auto-resize / optimise on upload)
+
+Why a single Next.js app: the client and API live in the same
+process, so there is no CORS or cross-site cookie problem, and
+host port 3000 is the single public entry point the preview uses.
+
+==============================================================
+7. API SURFACE
+==============================================================
+
+Auth
+  POST /api/auth/register        create student account
+  POST /api/auth/login           username + password
+  POST /api/auth/logout
+  GET  /api/auth/me              current session
+  POST /api/admin/login          shared admin credentials
+  GET  /api/auth/google          (optional, when configured)
+  GET  /api/auth/callback/google (optional)
+
+Admin (guarded)
+  GET/POST        /api/admin/quizzes
+  GET/PUT/DELETE  /api/admin/quizzes/:id
+  POST            /api/admin/quizzes/:id/questions
+  PUT/DELETE      /api/admin/questions/:id
+  POST            /api/admin/upload          image upload
+  POST            /api/admin/quizzes/:id/publish
+
+Student
+  GET  /api/quiz/by-code/:code   load a published quiz
+  POST /api/attempts             start an attempt
+  POST /api/attempts/:id/answer  submit one answer
+  POST /api/attempts/:id/finish  finish and score
+
+==============================================================
+8. IMAGE UPLOADS  (decision: PUBLIC)
+==============================================================
+
+- Files are stored PUBLICLY -- each upload gets a permanent,
+  public URL that never expires and anyone with the link can open.
+- Admin uploads a figure either per question or per quiz.
+- On upload the image is auto-resized (max long edge, sensible
+  cap) and re-encoded for size, using sharp.
+- Served from a static public path on the same origin.
+- Later swap: if the school ever needs private files or a CDN,
+  the storage layer is isolated so it can move to S3-compatible
+  object storage without touching the quiz logic.
+
+==============================================================
+9. UI / UX DETAILS
+==============================================================
+
+- Mobile-first (the preview is 360px wide), scaling up to
+  desktop/smartboard.
+- Animated transitions between questions (slide / fade).
+- Options reveal with a staggered animation.
+- A circular countdown ring when a time limit is active.
+- The smartboard panel slides in from the side.
+- CUSTOM CURSOR: a styled cursor that follows the pointer with
+  hover states on interactive elements; falls back to the native
+  cursor on touch devices.
+- Clear, large, high-contrast typography for classroom use.
+
+==============================================================
+10. TIME LIMITS
+==============================================================
+
+- Disabled by default.
+- If enabled, a countdown is shown.
+- Planned default: a per-question limit (auto-advance when it
+  ends); a whole-quiz limit is a small addition.
+- Admin sets it per quiz and/or per question.
+
+==============================================================
+11. RUNNING IT (Docker Compose)
+==============================================================
+
+docker-compose.base44.yml will define:
+  db   : postgres:16, healthcheck, persistent volume
+  web  : node:22, source bind-mounted, `npm install` on startup,
+         `next dev` (live reload), web entry point on host 3000
+  migrate : one-shot service that runs migrations, ordered after
+            db is healthy
+
+The preview (port 3000) shows the running app with live reload.
+
+==============================================================
+12. ENVIRONMENT & SECRETS
+==============================================================
+
+Local infrastructure (generated by us, wired in compose):
+  POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB
+  DATABASE_URL
+
+Generated app secret:
+  SESSION_SECRET  (signs login cookies)
+
+Admin credentials (from the user):
+  ADMIN_USERNAME
+  ADMIN_PASSWORD_HASH   (or a plain ADMIN_PASSWORD we hash on boot)
+
+Optional external credential (NOT yet provided):
+  GOOGLE_CLIENT_ID
+  GOOGLE_CLIENT_SECRET
+  -> Google login stays inactive until these are added from the
+     Secrets page; nothing else in the app depends on them.
+
+==============================================================
+13. BUILD MILESTONES
+==============================================================
+
+M1  Scaffold Next.js + Tailwind + Postgres in compose; app boots
+    on port 3000 with a placeholder home page.
+M2  Database schema + migrations + seed.
+M3  Auth: student username/password + shared admin login.
+M4  Admin area: create quiz, add questions, upload images, publish,
+    generate code.
+M5  Student flow: enter code, take quiz, score summary.
+M6  Smartboard drawing panel.
+M7  Time limits + countdown.
+M8  Polish: animations, custom cursor, responsive pass.
+M9  (Optional) Google login, once credentials exist.
+
+==============================================================
+14. OPEN ITEMS / STILL TO DECIDE
+==============================================================
+
+- Pacing: self-paced per student, or teacher-driven live session
+  with the whole class on the same question? (Plan assumes
+  self-paced to start.)
+- Should the drawing canvas persist per question or reset between
+  questions?
+- Do students see their score immediately, or does the admin see
+  all results?
+- Google OAuth credentials (optional integration).
+- Hosting target for the real deployment + custom domain: the
+  sandbox preview is a development environment only; a custom
+  domain attaches to wherever the app is actually hosted.
+
+==============================================================
+15. NOTE ON THIS PLAN
+==============================================================
+
+This file is the plan only. No application code has been written
+to the repository in this session. Say the word and implementation
+starts at milestone M1.
+==============================================================
